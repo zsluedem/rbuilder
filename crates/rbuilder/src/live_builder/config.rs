@@ -4,6 +4,7 @@ use crate::{
     building::{
         builders::{
             ordering_builder::{OrderingBuilderConfig, OrderingBuildingAlgorithm},
+            preconf_builder::{PreconfBuilderAlgorithm, PreconfBuilderConfig},
             BacktestSimulateBlockInput, BestBlockCell, Block, BlockBuildingAlgorithm,
         },
         Sorting,
@@ -34,6 +35,7 @@ use super::base_config::BaseConfig;
 #[serde(tag = "algo", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SpecificBuilderConfig {
     OrderingBuilder(OrderingBuilderConfig),
+    PreconfBuilder(PreconfBuilderConfig),
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -88,6 +90,7 @@ impl LiveBuilderConfig for Config {
             SpecificBuilderConfig::OrderingBuilder(config) => {
                 crate::building::builders::ordering_builder::backtest_simulate_block(config, input)
             }
+            _ => todo!("not implemented"),
         }
     }
 }
@@ -216,6 +219,12 @@ fn create_builder(
                 cfg.name,
             ))
         }
+        SpecificBuilderConfig::PreconfBuilder(config) => Arc::new(PreconfBuilderAlgorithm::new(
+            root_hash_task_pool.clone(),
+            sbundle_mergeabe_signers.to_vec(),
+            config,
+            cfg.name,
+        )),
     }
 }
 

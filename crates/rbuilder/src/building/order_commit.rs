@@ -1099,7 +1099,7 @@ impl<'a, 'b, 'c> PartialBlockFork<'a, 'b, 'c, ()> {
     }
 }
 
-fn coinbase_profit(
+pub fn coinbase_profit(
     coinbase_balance_before: U256,
     coinbase_balance_after: U256,
 ) -> Result<U256, OrderErr> {

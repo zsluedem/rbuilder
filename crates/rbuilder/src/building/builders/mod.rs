@@ -1,5 +1,7 @@
 //! builders is a subprocess that builds a block
+pub mod dummy_order;
 pub mod ordering_builder;
+pub mod preconf_builder;
 
 use crate::{
     building::{
@@ -29,7 +31,7 @@ use std::{
 };
 use tokio::sync::{broadcast, broadcast::error::TryRecvError};
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Block we built
 #[derive(Debug, Clone)]
@@ -64,11 +66,13 @@ impl BlockBuildingSink for BestBlockCell {
 
 impl BestBlockCell {
     pub fn compare_and_update(&self, block: Block) {
+        info!("Comparing block with best block");
         let mut best_block = self.val.lock().unwrap();
         let old_value = best_block
             .as_ref()
             .map(|b| b.trace.bid_value)
             .unwrap_or_default();
+        info!("Old value: {} {}", old_value, block.trace.bid_value);
         if block.trace.bid_value > old_value {
             *best_block = Some(block);
         }

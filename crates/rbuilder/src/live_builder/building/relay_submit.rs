@@ -21,7 +21,7 @@ use reth::primitives::{ChainSpec, SealedBlock};
 use std::{sync::Arc, time::Duration};
 use tokio::time::{sleep, Instant};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info_span, trace, warn, Instrument};
+use tracing::{debug, error, info, info_span, trace, warn, Instrument};
 
 const SIM_ERROR_CATEGORY: &str = "submit_block_simulation";
 const VALIDATION_ERROR_CATEGORY: &str = "validate_block_simulation";
@@ -109,6 +109,7 @@ async fn run_submit_to_relays_job(
         last_submit_time = Instant::now();
 
         let block = if let Some(new_block) = best_bid.take_best_block() {
+            info!("New best block bid value: {}", new_block.trace.bid_value);
             if new_block.trace.bid_value > last_bid_value {
                 last_bid_value = new_block.trace.bid_value;
                 new_block
