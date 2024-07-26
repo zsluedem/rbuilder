@@ -19,12 +19,14 @@ use crate::{
         simulation::OrderSimulationPool,
         watchdog::spawn_watchdog_thread,
     },
+    mev_boost::Constraint,
     primitives::mev_boost::MevBoostRelay,
     telemetry::inc_active_slots,
     utils::{error_storage::spawn_error_storage_writer, ProviderFactoryReopener, Signer},
 };
 use ahash::HashSet;
 use alloy_primitives::{Address, B256};
+use alloy_rlp::Decodable;
 use bidding::BiddingService;
 use building::BlockBuildingPool;
 use eyre::Context;
@@ -35,11 +37,12 @@ use reth::{
     providers::{HeaderProvider, ProviderFactory},
 };
 use reth_db::database::Database;
+use reth_primitives::TransactionSignedEcRecovered;
 use std::{cmp::min, path::PathBuf, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::task::spawn_blocking;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// Time the proposer have to propose a block from the beginning of the slot (https://www.paradigm.xyz/2023/04/mev-boost-ethereum-consensus Slot anatomy)
 const SLOT_PROPOSAL_DURATION: std::time::Duration = Duration::from_secs(4);
@@ -169,7 +172,7 @@ where
             // see if we can get parent header in a reasonable time
 
             let time_to_slot = payload.timestamp() - OffsetDateTime::now_utc();
-            debug!(
+            info!(
                 slot = payload.slot(),
                 block = payload.block(),
                 ?time_to_slot,
@@ -220,14 +223,34 @@ where
                 }
             }
 
-            debug!(
+            info!(
                 slot = payload.slot(),
                 block = payload.block(),
                 "Got header for slot"
             );
 
             inc_active_slots();
-
+            let mut preconf_list = Vec::new();
+            for relay in self.relays.iter() {
+                match relay.client.get_preconf_list(payload.slot()).await {
+                    Ok(constraints) => {
+                        let constraints: Vec<Constraint> =
+                            constraints.constraints.into_iter().flatten().collect();
+                        let txs = constraints
+                            .into_iter()
+                            .map(|c| TransactionSignedEcRecovered::decode(&mut c.tx.as_ref()))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        preconf_list.extend(txs);
+                    }
+                    Err(e) => {
+                        warn!(
+                            slot = payload.slot(),
+                            "Failed to get preconf list from relay: {:?}", e
+                        );
+                    }
+                };
+            }
+            info!("preconf list {:?}", preconf_list);
             let block_ctx = BlockBuildingContext::from_attributes(
                 payload.payload_attributes_event.clone(),
                 &parent_header,
@@ -237,6 +260,7 @@ where
                 Some(payload.suggested_gas_limit),
                 self.extra_data.clone(),
                 None,
+                preconf_list,
             );
 
             builder_pool.start_block_building(
