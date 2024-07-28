@@ -130,6 +130,7 @@ pub async fn main() -> eyre::Result<()> {
             None,
             Vec::new(),
             None,
+            vec![],
         );
 
         let block_cancel = CancellationToken::new();

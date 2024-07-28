@@ -80,6 +80,7 @@ async fn main() -> eyre::Result<()> {
         blocklist: Default::default(),
         excess_blob_gas: block_data.excess_blob_gas,
         spec_id: SpecId::LATEST,
+        preconf_list: vec![],
     };
 
     // Get the landed orders (all Order::Tx) from the block

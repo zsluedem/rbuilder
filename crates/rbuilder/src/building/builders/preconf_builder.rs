@@ -3,6 +3,7 @@ use crate::{
         builders::{dummy_order::DummyOrderFactory, LiveBuilderInput},
         BlockBuildingContext, BlockState, BuiltBlockTrace, PartialBlock,
     },
+    mev_boost::PreconfRequest,
     primitives::OrderId,
     telemetry,
     utils::{is_provider_factory_health_error, Signer},
@@ -11,6 +12,7 @@ use ahash::{HashMap, HashSet};
 use alloy_primitives::{utils::format_ether, Address};
 use reth::providers::{BlockNumReader, ProviderFactory};
 use reth_db::database::Database;
+use reth_primitives::{Transaction, TransactionSigned, TransactionSignedEcRecovered};
 use reth_provider::StateProvider;
 use serde::Deserialize;
 
@@ -21,6 +23,7 @@ use crate::{
 use reth::tasks::pool::BlockingTaskPool;
 use reth_payload_builder::database::CachedReads;
 use std::{
+    cmp::max,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -42,6 +45,8 @@ pub struct PreconfBuilderConfig {
     pub build_duration_deadline_ms: Option<u64>,
 
     pub dummy_tx_private_key: String,
+
+    pub send_value: u64,
 }
 
 impl PreconfBuilderConfig {
@@ -119,6 +124,29 @@ impl<DB: Database + Clone + 'static> PreconfBuilderContext<DB> {
             .account_balance(ctx.attributes.suggested_fee_recipient)?
             .unwrap_or_default();
 
+        let mut preconf_requests = ctx.preconf_list.clone();
+        if preconf_requests.is_empty() {
+            info!("No preconf requests, skipping block");
+            return Ok(None);
+        }
+        preconf_requests.sort_by_key(|p| p.preconf_conditions.ordering_meta_data.index);
+        let preconf_max_index = preconf_requests
+            .last()
+            .unwrap()
+            .preconf_conditions
+            .ordering_meta_data
+            .index;
+        let preconf_index_map =
+            preconf_requests
+                .iter()
+                .fold(HashMap::default(), |mut map, preconf| {
+                    map.insert(
+                        preconf.preconf_conditions.ordering_meta_data.index,
+                        preconf.clone(),
+                    );
+                    map
+                });
+
         let (mut built_block_trace, state, partial_block) = {
             let mut partial_block =
                 PartialBlock::new(false, None).with_tracer(GasUsedSimulationTracer::default());
@@ -133,18 +161,25 @@ impl<DB: Database + Clone + 'static> PreconfBuilderContext<DB> {
                 dummy_signer.address, ctx.block_env.coinbase
             );
             let current_nonce = state.nonce(dummy_signer.address)?;
-            let mut dummy_order_factory =
-                DummyOrderFactory::new(dummy_signer, ctx.chain_spec.chain().id(), current_nonce, ctx.block_env.coinbase);
+            let mut dummy_order_factory = DummyOrderFactory::new(
+                dummy_signer,
+                ctx.chain_spec.chain().id(),
+                current_nonce,
+                ctx.block_env.coinbase,
+                self.config.send_value,
+            );
+            let max_transaction = max(preconf_max_index, 10);
 
             // @Perf when gas left is too low we should break.
-            for _ in 0..10 {
-                if let Some(deadline) = self.config.build_duration_deadline() {
-                    if build_start.elapsed() > deadline {
-                        break;
-                    }
-                }
-                let tx = dummy_order_factory.generate_tx(ctx.block_env.basefee);
-
+            for index in 0..max_transaction {
+                let tx = if let Some(preconf) = preconf_index_map.get(&index) {
+                    info!("preconf request index found");
+                    let tx = generate_tx_from_preconf(preconf).expect("tx");
+                    let signer = tx.recover_signer_unchecked().expect("tx signer recover");
+                    TransactionSignedEcRecovered::from_signed_transaction(tx, signer)
+                } else {
+                    dummy_order_factory.generate_tx(ctx.block_env.basefee)
+                };
                 let start_time = Instant::now();
                 let commit_result = partial_block.commit_tx(&mut state, tx, &ctx);
                 let order_commit_time = start_time.elapsed();
@@ -157,10 +192,10 @@ impl<DB: Database + Clone + 'static> PreconfBuilderContext<DB> {
                         built_block_trace.add_included_order(res);
                     }
                     Err(err) => {
+                        warn!(?err, "Error executing tx");
                         execution_error = Some(err);
                     }
                 }
-                dummy_order_factory.increase_nonce();
                 trace!(
                     success,
                     order_commit_time_mus = order_commit_time.as_micros(),
@@ -189,7 +224,7 @@ impl<DB: Database + Clone + 'static> PreconfBuilderContext<DB> {
             )?;
 
             if !should_finalize {
-                trace!(
+                info!(
                     block = ctx.block_env.number.to::<u64>(),
                     builder_name = self.builder_name,
                     "Skipped block finalization",
@@ -237,7 +272,7 @@ impl<DB: Database + Clone + 'static> PreconfBuilderContext<DB> {
             ctx.timestamp(),
         );
 
-        trace!(
+        info!(
             block = ctx.block_env.number.to::<u64>(),
             build_time_mus = build_time.as_micros(),
             finalize_time_mus = finalize_time.as_micros(),
@@ -346,4 +381,11 @@ fn run_preconf_builder<DB: Database + Clone + 'static, SinkType: BlockBuildingSi
             }
         }
     }
+}
+
+fn generate_tx_from_preconf(preconf: &PreconfRequest) -> Option<TransactionSigned> {
+    preconf
+        .preconf_tx
+        .as_ref()
+        .map(|tx| serde_json::from_slice(tx).expect("tx deserde"))
 }

@@ -15,6 +15,7 @@ use reth_primitives::TransactionSignedEcRecovered;
 use tracing::info;
 
 use crate::{
+    mev_boost::PreconfRequest,
     primitives::{
         MempoolTx, Order, OrderId, SimValue, SimulatedOrder, TransactionSignedEcRecoveredWithBlobs,
     },
@@ -77,6 +78,7 @@ pub struct BlockBuildingContext {
     pub excess_blob_gas: Option<u64>,
     /// Version of the EVM that we are going to use
     pub spec_id: SpecId,
+    pub preconf_list: Vec<PreconfRequest>,
 }
 
 impl BlockBuildingContext {
@@ -91,6 +93,7 @@ impl BlockBuildingContext {
         prefer_gas_limit: Option<u64>,
         extra_data: Vec<u8>,
         spec_id: Option<SpecId>,
+        preconf_list: Vec<PreconfRequest>,
     ) -> BlockBuildingContext {
         let attributes = EthPayloadBuilderAttributes::try_new(
             attributes.data.parent_block_hash,
@@ -142,6 +145,7 @@ impl BlockBuildingContext {
             extra_data,
             excess_blob_gas,
             spec_id,
+            preconf_list,
         }
     }
 
@@ -153,6 +157,7 @@ impl BlockBuildingContext {
         chain_spec: Arc<ChainSpec>,
         blocklist: HashSet<Address>,
         spec_id: Option<SpecId>,
+        preconf_list: Vec<PreconfRequest>,
     ) -> BlockBuildingContext {
         let builder_signer =
             Signer::try_from_secret(B256::random()).expect("failed to create signer");
@@ -239,6 +244,7 @@ impl BlockBuildingContext {
                 .excess_blob_gas
                 .map(|b| b as u64),
             spec_id,
+            preconf_list,
         }
     }
 

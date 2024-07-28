@@ -12,11 +12,13 @@ use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE},
     Body, Response, StatusCode,
 };
+use reth::rpc::types::beacon::BlsSignature;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 use ssz::Encode;
 use std::{io::Write, str::FromStr};
 use thiserror::Error;
+use tracing::info;
 use url::Url;
 
 pub use sign_payload::*;
@@ -258,6 +260,46 @@ pub struct ValidatorSlotData {
     pub entry: ValidatorRegistration,
 }
 
+type Transaction = Vec<u8>;
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct PreconfRequest {
+    pub tip_tx: TipTransaction,
+    pub preconf_conditions: PreconfCondition,
+    pub init_signature: BlsSignature,
+    tip_tx_signature: Bytes,
+    pub preconfer_signature: Bytes,
+    pub preconf_tx: Option<Transaction>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct TipTransaction {
+    pub gas_limit: U256,
+    pub from: Address,
+    pub to: Address,
+    pub pre_pay: U256,
+    pub after_pay: U256,
+    pub nonce: U256,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct PreconfCondition {
+    inclusion_meta_data: InclusionMetaData,
+    pub ordering_meta_data: OrderingMetaData,
+    pub block_number: u64,
+    pub slot: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct InclusionMetaData {
+    starting_block_number: U256,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OrderingMetaData {
+    transaction_count: U256,
+    pub index: u64,
+}
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Too many txs")]
@@ -395,6 +437,18 @@ impl RelayClient {
     ) -> Result<Option<BuilderBlockReceived>, RelayError> {
         self.get_one_builder_block_received(&format!("block_hash={:?}", block_hash))
             .await
+    }
+
+    pub async fn get_preconf_list(&self, slot: u64) -> Result<Vec<PreconfRequest>, RelayError> {
+        let url = {
+            let mut url = self.url.clone();
+            url.set_path(&format!("/relay/v1/data/preconf/preconf_request/{slot}"));
+            url
+        };
+        let resp = reqwest::get(url).await?;
+        let content = resp.bytes().await?;
+        info!("Preconf list: {:?}", content);
+        Ok(serde_json::from_slice(&content).expect("serde"))
     }
 
     pub async fn validator_registration(

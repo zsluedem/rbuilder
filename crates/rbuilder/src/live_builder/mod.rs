@@ -169,7 +169,7 @@ where
             // see if we can get parent header in a reasonable time
 
             let time_to_slot = payload.timestamp() - OffsetDateTime::now_utc();
-            debug!(
+            info!(
                 slot = payload.slot(),
                 block = payload.block(),
                 ?time_to_slot,
@@ -220,14 +220,26 @@ where
                 }
             }
 
-            debug!(
+            info!(
                 slot = payload.slot(),
                 block = payload.block(),
                 "Got header for slot"
             );
 
             inc_active_slots();
-
+            let mut preconf_list = Vec::new();
+            for relay in self.relays.iter() {
+                match relay.client.get_preconf_list(payload.slot()).await {
+                    Ok(l) => preconf_list.extend(l),
+                    Err(e) => {
+                        warn!(
+                            slot = payload.slot(),
+                            "Failed to get preconf list from relay: {:?}", e
+                        );
+                    }
+                };
+            }
+            info!("preconf list {:?}", preconf_list);
             let block_ctx = BlockBuildingContext::from_attributes(
                 payload.payload_attributes_event.clone(),
                 &parent_header,
@@ -237,6 +249,7 @@ where
                 Some(payload.suggested_gas_limit),
                 self.extra_data.clone(),
                 None,
+                preconf_list,
             );
 
             builder_pool.start_block_building(
