@@ -410,7 +410,7 @@ impl RelayClient {
         let resp = reqwest::get(url).await?;
         let content = resp.bytes().await?;
         debug!("Getting preconf list from relay: {:?}", content);
-        Ok(serde_json::from_slice(&content).expect("serde"))
+        Ok(serde_json::from_slice(&content).unwrap_or_default())
     }
 
     pub async fn validator_registration(
