@@ -7,6 +7,7 @@ use std::{
 use alloy_primitives::{utils::format_ether, U256};
 use reth::revm::cached::CachedReads;
 use reth_db::Database;
+use reth_primitives::TransactionSignedEcRecovered;
 use reth_provider::{BlockReader, DatabaseProviderFactory, StateProviderFactory};
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;

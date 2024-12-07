@@ -520,7 +520,6 @@ where
         }
         SpecificBuilderConfig::PreconfBuilder(config) => Arc::new(PreconfBuildingAlgorithm::new(
             root_hash_config.clone(),
-            root_hash_task_pool.clone(),
             sbundle_mergeabe_signers.to_vec(),
             config,
             cfg.name,
