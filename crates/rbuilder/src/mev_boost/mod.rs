@@ -409,7 +409,10 @@ impl RelayClient {
         };
         let resp = reqwest::get(url).await?;
         let content = resp.bytes().await?;
-        debug!("Getting preconf list from relay: {:?}", content);
+        debug!(
+            "Getting preconf list from relay: {:?} from slot {}",
+            content, slot
+        );
         Ok(serde_json::from_slice(&content).unwrap_or_default())
     }
 

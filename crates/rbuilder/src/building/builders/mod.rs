@@ -48,6 +48,7 @@ pub struct LiveBuilderInput<P, DB> {
     pub builder_name: String,
     pub cancel: CancellationToken,
     pub sbundle_mergeabe_signers: Vec<Address>,
+    pub slot_data: MevBoostSlotData,
     phantom: PhantomData<DB>,
 }
 
@@ -208,6 +209,7 @@ pub struct BlockBuildingAlgorithmInput<P> {
     /// output for the blocks
     pub sink: Arc<dyn UnfinishedBlockBuildingSink>,
     pub cancel: CancellationToken,
+    pub slot_data: MevBoostSlotData,
 }
 
 /// Algorithm to build blocks

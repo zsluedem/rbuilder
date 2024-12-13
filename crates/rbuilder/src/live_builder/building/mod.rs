@@ -108,7 +108,9 @@ where
         input: SlotOrderSimResults,
         cancel: CancellationToken,
     ) {
-        let builder_sink = self.sink_factory.create_sink(slot_data, cancel.clone());
+        let builder_sink = self
+            .sink_factory
+            .create_sink(slot_data.clone(), cancel.clone());
         let (broadcast_input, _) = broadcast::channel(10_000);
 
         let block_number = ctx.block_env.number.to::<u64>();
@@ -122,6 +124,7 @@ where
                 input: broadcast_input.subscribe(),
                 sink: builder_sink.clone(),
                 cancel: cancel.clone(),
+                slot_data: slot_data.clone(),
             };
             let builder = builder.clone();
             tokio::task::spawn_blocking(move || {

@@ -427,6 +427,7 @@ where
             builder_name: self.name.clone(),
             cancel: input.cancel,
             sbundle_mergeabe_signers: self.sbundle_mergeabe_signers.clone(),
+            slot_data: input.slot_data.clone(),
             phantom: Default::default(),
         };
         run_parallel_builder(live_input, &self.config);

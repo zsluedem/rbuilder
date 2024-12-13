@@ -7,19 +7,20 @@
 //! For some more details see [`PreconfBuilderConfig`]
 use crate::{
     building::{
-        block_orders_from_sim_orders,
         builders::{
             block_building_helper::BlockBuildingHelper, LiveBuilderInput, OrderIntakeConsumer,
         },
         BlockBuildingContext, BlockOrders, ExecutionError, Sorting,
     },
-    primitives::{AccountNonce, OrderId},
+    live_builder::payload_events::relay_epoch_cache::RelaysForSlotData,
+    primitives::{mev_boost::MevBoostRelay, AccountNonce, OrderId},
     roothash::RootHashConfig,
 };
 use ahash::{HashMap, HashSet};
 use alloy_primitives::Address;
 use reth::revm::cached::CachedReads;
 use reth_db::database::Database;
+use reth_primitives::TransactionSignedEcRecovered;
 use reth_provider::{BlockReader, DatabaseProviderFactory, StateProviderFactory};
 use serde::Deserialize;
 use std::{
@@ -31,7 +32,7 @@ use tracing::{error, info_span, trace};
 
 use super::{
     block_building_helper::BlockBuildingHelperFromProvider, handle_building_error,
-    BacktestSimulateBlockInput, Block, BlockBuildingAlgorithm, BlockBuildingAlgorithmInput,
+    BlockBuildingAlgorithm, BlockBuildingAlgorithmInput,
 };
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -62,8 +63,11 @@ impl PreconfBuilderConfig {
     }
 }
 
-pub fn run_preconf_builder<P, DB>(input: LiveBuilderInput<P, DB>, config: &PreconfBuilderConfig)
-where
+pub fn run_preconf_builder<P, DB>(
+    input: LiveBuilderInput<P, DB>,
+    config: &PreconfBuilderConfig,
+    relays: Vec<MevBoostRelay>,
+) where
     DB: Database + Clone + 'static,
     P: DatabaseProviderFactory<DB = DB, Provider: BlockReader>
         + StateProviderFactory
@@ -94,6 +98,13 @@ where
             break 'building;
         }
 
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut relay = RelaysForSlotData::new(&relays);
+        let preconf_list = runtime.block_on(async move {
+            relay
+                .get_preconf_list(input.slot_data.payload_attributes_event.data.proposal_slot)
+                .await
+        });
         match order_intake_consumer.consume_next_batch() {
             Ok(ok) => {
                 if !ok {
@@ -112,6 +123,7 @@ where
             use_suggested_fee_recipient_as_coinbase
                 && input.sink.can_use_suggested_fee_recipient_as_coinbase(),
             input.cancel.clone(),
+            preconf_list,
         ) {
             Ok(block) => {
                 if block.built_block_trace().got_no_signer_error {
@@ -130,53 +142,6 @@ where
             removed_orders.append(&mut removed);
         }
     }
-}
-
-pub fn backtest_simulate_block<P, DB>(
-    ordering_config: PreconfBuilderConfig,
-    input: BacktestSimulateBlockInput<'_, P>,
-) -> eyre::Result<(Block, CachedReads)>
-where
-    DB: Database + Clone + 'static,
-    P: DatabaseProviderFactory<DB = DB, Provider: BlockReader>
-        + StateProviderFactory
-        + Clone
-        + 'static,
-{
-    let use_suggested_fee_recipient_as_coinbase = ordering_config.coinbase_payment;
-    let state_provider = input
-        .provider
-        .history_by_block_number(input.ctx.block_env.number.to::<u64>() - 1)?;
-    let block_orders = block_orders_from_sim_orders(
-        input.sim_orders,
-        ordering_config.sorting,
-        &state_provider,
-        &input.sbundle_mergeabe_signers,
-    )?;
-    let mut builder = PreconfBuilderContext::new(
-        input.provider.clone(),
-        input.builder_name,
-        input.ctx.clone(),
-        ordering_config,
-        RootHashConfig::skip_root_hash(),
-    )
-    .with_cached_reads(input.cached_reads.unwrap_or_default());
-    let block_builder = builder.build_block(
-        block_orders,
-        use_suggested_fee_recipient_as_coinbase,
-        CancellationToken::new(),
-    )?;
-
-    let payout_tx_value = if use_suggested_fee_recipient_as_coinbase {
-        None
-    } else {
-        Some(block_builder.true_block_value()?)
-    };
-    let finalize_block_result = block_builder.finalize_block(payout_tx_value)?;
-    Ok((
-        finalize_block_result.block,
-        finalize_block_result.cached_reads,
-    ))
 }
 
 #[derive(Debug)]
@@ -244,6 +209,7 @@ where
         block_orders: BlockOrders,
         use_suggested_fee_recipient_as_coinbase: bool,
         cancel_block: CancellationToken,
+        preconf_list: Vec<TransactionSignedEcRecovered>,
     ) -> eyre::Result<Box<dyn BlockBuildingHelper>> {
         let build_attempt_id: u32 = rand::random();
         let span = info_span!("build_run", build_attempt_id);
@@ -269,7 +235,8 @@ where
             self.config.sorting.into(),
             cancel_block,
         )?;
-        let block_orders = self.fill_preconf_txs(&mut block_building_helper, block_orders)?;
+        let block_orders =
+            self.fill_preconf_txs(&mut block_building_helper, block_orders, preconf_list)?;
         self.fill_orders(&mut block_building_helper, block_orders, build_start)?;
         block_building_helper.set_trace_fill_time(build_start.elapsed());
         self.cached_reads = Some(block_building_helper.clone_cached_reads());
@@ -280,9 +247,10 @@ where
         &mut self,
         block_building_helper: &mut BlockBuildingHelperFromProvider<P, DB>,
         mut block_orders: BlockOrders,
+        preconf_list: Vec<TransactionSignedEcRecovered>,
     ) -> eyre::Result<BlockOrders> {
         // let mut order_attempts: HashMap<OrderId, usize> = HashMap::default();
-        for tx in self.ctx.preconf_list.clone().into_iter() {
+        for tx in preconf_list.into_iter() {
             let start_time = Instant::now();
             let tx_hash = tx.hash().to_string();
 
@@ -397,6 +365,7 @@ pub struct PreconfBuildingAlgorithm {
     sbundle_mergeabe_signers: Vec<Address>,
     config: PreconfBuilderConfig,
     name: String,
+    relay_clients: Vec<MevBoostRelay>,
 }
 
 impl PreconfBuildingAlgorithm {
@@ -405,12 +374,14 @@ impl PreconfBuildingAlgorithm {
         sbundle_mergeabe_signers: Vec<Address>,
         config: PreconfBuilderConfig,
         name: String,
+        relay_clients: Vec<MevBoostRelay>,
     ) -> Self {
         Self {
             root_hash_config,
             sbundle_mergeabe_signers,
             config,
             name,
+            relay_clients,
         }
     }
 }
@@ -437,8 +408,9 @@ where
             builder_name: self.name.clone(),
             cancel: input.cancel,
             sbundle_mergeabe_signers: self.sbundle_mergeabe_signers.clone(),
+            slot_data: input.slot_data.clone(),
             phantom: Default::default(),
         };
-        run_preconf_builder(live_input, &self.config);
+        run_preconf_builder(live_input, &self.config, self.relay_clients.clone());
     }
 }

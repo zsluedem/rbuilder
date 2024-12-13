@@ -346,6 +346,7 @@ impl LiveBuilderConfig for Config {
             self.live_builders()?,
             root_hash_config,
             self.base_config.sbundle_mergeabe_signers(),
+            self.l1_config.create_relays()?,
         );
         Ok(live_builder.with_builders(builders))
     }
@@ -483,6 +484,7 @@ pub fn create_builders<P, DB>(
     configs: Vec<BuilderConfig>,
     root_hash_config: RootHashConfig,
     sbundle_mergeabe_signers: Vec<Address>,
+    relay_clients: Vec<MevBoostRelay>,
 ) -> Vec<Arc<dyn BlockBuildingAlgorithm<P, DB>>>
 where
     DB: Database + Clone + 'static,
@@ -493,7 +495,14 @@ where
 {
     configs
         .into_iter()
-        .map(|cfg| create_builder(cfg, &root_hash_config, &sbundle_mergeabe_signers))
+        .map(|cfg| {
+            create_builder(
+                cfg,
+                &root_hash_config,
+                &sbundle_mergeabe_signers,
+                relay_clients.clone(),
+            )
+        })
         .collect()
 }
 
@@ -501,6 +510,7 @@ fn create_builder<P, DB>(
     cfg: BuilderConfig,
     root_hash_config: &RootHashConfig,
     sbundle_mergeabe_signers: &[Address],
+    relay_clients: Vec<MevBoostRelay>,
 ) -> Arc<dyn BlockBuildingAlgorithm<P, DB>>
 where
     DB: Database + Clone + 'static,
@@ -523,6 +533,7 @@ where
             sbundle_mergeabe_signers.to_vec(),
             config,
             cfg.name,
+            relay_clients,
         )),
         SpecificBuilderConfig::ParallelBuilder(parallel_cfg) => {
             Arc::new(ParallelBuildingAlgorithm::new(

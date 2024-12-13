@@ -88,7 +88,6 @@ pub struct BlockBuildingContext {
     /// Version of the EVM that we are going to use
     pub spec_id: SpecId,
     pub shared_sparse_mpt_cache: SparseTrieSharedCache,
-    pub preconf_list: Vec<TransactionSignedEcRecovered>,
 }
 
 impl BlockBuildingContext {
@@ -104,7 +103,6 @@ impl BlockBuildingContext {
         prefer_gas_limit: Option<u64>,
         extra_data: Vec<u8>,
         spec_id: Option<SpecId>,
-        preconf_list: Vec<TransactionSignedEcRecovered>,
     ) -> Option<BlockBuildingContext> {
         let attributes = EthPayloadBuilderAttributes::try_new(
             attributes.data.parent_block_hash,
@@ -168,7 +166,6 @@ impl BlockBuildingContext {
             excess_blob_gas,
             spec_id,
             shared_sparse_mpt_cache: Default::default(),
-            preconf_list,
         })
     }
 
@@ -183,7 +180,6 @@ impl BlockBuildingContext {
         coinbase: Address,
         suggested_fee_recipient: Address,
         builder_signer: Option<Signer>,
-        preconf_list: Vec<TransactionSignedEcRecovered>,
     ) -> BlockBuildingContext {
         let block_number = onchain_block.header.number;
 
@@ -255,7 +251,6 @@ impl BlockBuildingContext {
             excess_blob_gas: onchain_block.header.excess_blob_gas,
             spec_id,
             shared_sparse_mpt_cache: Default::default(),
-            preconf_list,
         }
     }
 
@@ -266,7 +261,6 @@ impl BlockBuildingContext {
         BlockBuildingContext::from_onchain_block(
             onchain_block,
             reth_chainspec::MAINNET.clone(),
-            Default::default(),
             Default::default(),
             Default::default(),
             Default::default(),
