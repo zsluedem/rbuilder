@@ -33,7 +33,7 @@ use building::BlockBuildingPool;
 use eyre::Context;
 use jsonrpsee::RpcModule;
 use order_input::ReplaceableOrderPoolCommand;
-use payload_events::MevBoostSlotData;
+use payload_events::{relay_epoch_cache::RelaysForSlotData, MevBoostSlotData};
 use reth::transaction_pool::{
     BlobStore, EthPooledTransaction, Pool, TransactionListenerKind, TransactionOrdering,
     TransactionPool, TransactionValidator,
@@ -82,6 +82,14 @@ impl TimingsConfig {
 /// Trait used to trigger a new block building process in the slot.
 pub trait SlotSource {
     fn recv_slot_channel(self) -> mpsc::UnboundedReceiver<MevBoostSlotData>;
+    fn get_preconf_source(&self) -> RelaysForSlotData;
+}
+
+pub trait PreconfSource {
+    fn get_preconfs(
+        &mut self,
+        slot: u64,
+    ) -> impl std::future::Future<Output = Vec<TransactionSigned>> + Send;
 }
 
 /// Max headers sent to the cleaning task before the main loop blocks.
@@ -155,6 +163,7 @@ where
         }
 
         let mut inner_jobs_handles = Vec::new();
+        let mut preconf_source = self.blocks_source.get_preconf_source();
         let mut payload_events_channel = self.blocks_source.recv_slot_channel();
 
         let (header_sender, header_receiver) = mpsc::channel(CLEAN_TASKS_CHANNEL_SIZE);
@@ -270,6 +279,8 @@ where
             let root_hasher =
                 Arc::from(self.provider.root_hasher(payload.parent_block_num_hash())?);
 
+            let preconf_list = preconf_source.get_preconfs(payload.slot()).await;
+
             if let Some(block_ctx) = BlockBuildingContext::from_attributes(
                 payload.payload_attributes_event.clone(),
                 &parent_header,
@@ -280,6 +291,7 @@ where
                 self.extra_data.clone(),
                 None,
                 root_hasher,
+                preconf_list,
             ) {
                 mark_building_started(block_ctx.timestamp());
                 builder_pool.start_block_building(

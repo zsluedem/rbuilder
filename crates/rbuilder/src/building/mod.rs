@@ -13,7 +13,7 @@ pub mod tracers;
 use alloy_consensus::{Header, EMPTY_OMMER_ROOT_HASH};
 use alloy_primitives::{Address, Bytes, U256};
 use builders::mock_block_building_helper::MockRootHasher;
-use reth_primitives::BlockBody;
+use reth_primitives::{BlockBody, TransactionSigned};
 use reth_primitives_traits::{proofs, Block as _};
 
 use crate::{
@@ -93,6 +93,7 @@ pub struct BlockBuildingContext {
     /// Version of the EVM that we are going to use
     pub spec_id: SpecId,
     pub root_hasher: Arc<dyn RootHasher>,
+    pub preconf_list: Vec<TransactionSigned>,
 }
 
 impl BlockBuildingContext {
@@ -109,6 +110,7 @@ impl BlockBuildingContext {
         extra_data: Vec<u8>,
         spec_id: Option<SpecId>,
         root_hasher: Arc<dyn RootHasher>,
+        preconf_list: Vec<TransactionSigned>,
     ) -> Option<BlockBuildingContext> {
         let attributes = EthPayloadBuilderAttributes::try_new(
             attributes.data.parent_block_hash,
@@ -171,6 +173,7 @@ impl BlockBuildingContext {
             excess_blob_gas,
             spec_id,
             root_hasher,
+            preconf_list,
         })
     }
 
@@ -254,6 +257,7 @@ impl BlockBuildingContext {
             excess_blob_gas: onchain_block.header.excess_blob_gas,
             spec_id,
             root_hasher,
+            preconf_list: Vec::new(),
         }
     }
 
@@ -289,6 +293,10 @@ impl BlockBuildingContext {
 
     pub fn coinbase_is_suggested_fee_recipient(&self) -> bool {
         self.evm_env.block_env.coinbase == self.attributes.suggested_fee_recipient
+    }
+
+    pub fn preconf_list(&self) -> Vec<TransactionSigned> {
+        self.preconf_list.clone()
     }
 }
 
@@ -482,6 +490,60 @@ impl<Tracer: SimulationTracer> PartialBlock<Tracer> {
         self.gas_reserved = 0;
     }
 
+    pub fn commit_no_sim_order(
+        &mut self,
+        order: &Order,
+        ctx: &BlockBuildingContext,
+        state: &mut BlockState,
+    ) -> Result<Result<ExecutionResult, ExecutionError>, CriticalCommitOrderError> {
+        if ctx.builder_signer.is_none() {
+            // Return here to avoid wasting time on a call to fork.commit_order that 99% will fail
+            return Ok(Err(ExecutionError::OrderError(OrderErr::Bundle(
+                BundleErr::NoSigner,
+            ))));
+        }
+
+        let mut fork = PartialBlockFork::new(state).with_tracer(&mut self.tracer);
+        let exec_result = fork.commit_order(
+            &order,
+            ctx,
+            self.gas_used,
+            self.gas_reserved,
+            self.blob_gas_used,
+            self.discard_txs,
+        )?;
+        let ok_result = match exec_result {
+            Ok(ok) => ok,
+            Err(err) => {
+                return Ok(Err(err.into()));
+            }
+        };
+
+        let inplace_sim_result = SimValue::new(
+            ok_result.coinbase_profit,
+            ok_result.gas_used,
+            ok_result.blob_gas_used,
+            ok_result.paid_kickbacks.clone(),
+        );
+
+        self.gas_used += ok_result.gas_used;
+        self.blob_gas_used += ok_result.blob_gas_used;
+        self.coinbase_profit += ok_result.coinbase_profit;
+        self.executed_tx.extend(ok_result.txs.clone());
+        self.receipts.extend(ok_result.receipts.clone());
+        Ok(Ok(ExecutionResult {
+            coinbase_profit: ok_result.coinbase_profit,
+            inplace_sim: inplace_sim_result,
+            gas_used: ok_result.gas_used,
+            order: order.clone(),
+            txs: ok_result.txs,
+            original_order_ids: ok_result.original_order_ids,
+            receipts: ok_result.receipts,
+            nonces_updated: ok_result.nonces_updated,
+            paid_kickbacks: ok_result.paid_kickbacks,
+        }))
+    }
+
     pub fn commit_order(
         &mut self,
         order: &SimulatedOrder,
@@ -557,6 +619,48 @@ impl<Tracer: SimulationTracer> PartialBlock<Tracer> {
             .checked_sub(U256::from(gas_limit) * ctx.evm_env.block_env.basefee)
             .ok_or(InsertPayoutTxErr::ProfitTooLow)
     }
+
+    // pub fn commit_tx(
+    //     &mut self,
+    //     state: &mut BlockState,
+    //     tx: TransactionSignedEcRecovered,
+    //     ctx: &BlockBuildingContext,
+    // ) -> Result<ExecutionResult, InsertPayoutTxErr> {
+    //     // let a:TxEnvelope
+    //     let tx = TransactionSignedEcRecoveredWithBlobs::new_no_blobs(tx).unwrap();
+    //     let coinbase_balance_before = state.balance(ctx.block_env.coinbase).expect("balace");
+    //     trace!("coinbase_balance_before: {:}", coinbase_balance_before);
+    //     let mut fork = PartialBlockFork::new(state).with_tracer(&mut self.tracer);
+    //     let exec_result = fork.commit_tx(&tx, ctx, self.gas_used, 0, self.blob_gas_used)?;
+    //     let ok_result = exec_result?;
+    //     let coinbase_balance_after = state.balance(ctx.block_env.coinbase).expect("balace");
+    //     trace!("coinbase_balance_after: {:}", coinbase_balance_after);
+    //     let coinbase_profit =
+    //         coinbase_profit(coinbase_balance_before, coinbase_balance_after).expect("profit");
+    //     let inplace_sim_result = SimValue::new(
+    //         coinbase_profit,
+    //         ok_result.gas_used,
+    //         ok_result.blob_gas_used,
+    //         vec![],
+    //     );
+    //     self.gas_used += ok_result.gas_used;
+    //     self.blob_gas_used += ok_result.blob_gas_used;
+    //     self.coinbase_profit += coinbase_profit;
+    //     self.executed_tx.push(ok_result.tx);
+    //     self.receipts.push(ok_result.receipt.clone());
+
+    //     Ok(ExecutionResult {
+    //         coinbase_profit: coinbase_profit,
+    //         inplace_sim: inplace_sim_result,
+    //         gas_used: ok_result.gas_used,
+    //         order: Order::Tx(MempoolTx::new(tx.clone())),
+    //         txs: vec![tx],
+    //         original_order_ids: vec![],
+    //         receipts: vec![ok_result.receipt],
+    //         nonces_updated: vec![ok_result.nonce_updated],
+    //         paid_kickbacks: vec![],
+    //     })
+    // }
 
     /// Inserts payout tx to ctx.attributes.suggested_fee_recipient (should be called at the end of the block)
     /// Returns the paid value (block profit after subtracting the burned basefee of the payout tx)

@@ -108,6 +108,10 @@ impl MevBoostSlotDataGenerator {
         }
     }
 
+    pub fn preconf_source(&self) -> RelaysForSlotData {
+        RelaysForSlotData::new(&self.relays)
+    }
+
     /// Spawns the reader task.
     /// It reads from a PayloadSourceMuxer, replaces the fee_recipient/gas_limit with the info from the relays and filters duplicates.
     /// Why the need for replacing fee_recipient?
@@ -204,6 +208,10 @@ impl SlotSource for MevBoostSlotDataGenerator {
     fn recv_slot_channel(self) -> mpsc::UnboundedReceiver<MevBoostSlotData> {
         let (_handle, chan) = self.spawn();
         chan
+    }
+
+    fn get_preconf_source(&self) -> RelaysForSlotData {
+        self.preconf_source()
     }
 }
 

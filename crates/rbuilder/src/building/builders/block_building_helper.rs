@@ -1,9 +1,13 @@
+use alloy_consensus::transaction::Recovered;
 use alloy_primitives::{utils::format_ether, U256};
 use reth::revm::cached::CachedReads;
+use reth_primitives::TransactionSigned;
+use reth_primitives_traits::SignedTransaction;
 use std::{
     cmp::max,
     time::{Duration, Instant},
 };
+
 use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, trace};
@@ -15,7 +19,7 @@ use crate::{
         EstimatePayoutGasErr, ExecutionError, ExecutionResult, FinalizeError, FinalizeResult,
         PartialBlock, Sorting,
     },
-    primitives::SimulatedOrder,
+    primitives::{MempoolTx, Order, SimulatedOrder, TransactionSignedEcRecoveredWithBlobs},
     provider::StateProviderFactory,
     telemetry::{self, add_block_fill_time, add_order_simulation_time},
     utils::{check_block_hash_reader_health, HistoricalBlockError},
@@ -247,6 +251,36 @@ where
             provider,
             cancel_on_fatal_error,
         })
+    }
+
+    pub fn commit_preconf_tx(
+        &mut self,
+        tx: TransactionSigned,
+    ) -> Result<Result<&ExecutionResult, ExecutionError>, CriticalCommitOrderError> {
+        let signer = tx.recover_signer().expect("tx is not signed");
+        let signer_tx = Recovered::new_unchecked(tx, signer);
+        let tx_with_blobs = TransactionSignedEcRecoveredWithBlobs::new_no_blobs(signer_tx)
+            .expect("blob is not supported yet");
+        let order = Order::Tx(MempoolTx::new(tx_with_blobs));
+        let result = self.partial_block.commit_no_sim_order(
+            &order,
+            &self.building_ctx,
+            &mut self.block_state,
+        );
+        match result {
+            Ok(ok_result) => match ok_result {
+                Ok(res) => {
+                    self.built_block_trace.add_included_order(res);
+                    Ok(Ok(self.built_block_trace.included_orders.last().unwrap()))
+                }
+                Err(err) => {
+                    self.built_block_trace
+                        .modify_payment_when_no_signer_error(&err);
+                    Ok(Err(err))
+                }
+            },
+            Err(e) => Err(e),
+        }
     }
 
     /// Trace and telemetry
