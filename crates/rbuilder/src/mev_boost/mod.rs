@@ -7,17 +7,25 @@ pub mod submission;
 use super::utils::u256decimal_serde_helper;
 
 use alloy_primitives::{Address, BlockHash, Bytes, U256};
+use ethereum_consensus::{
+    bellatrix::presets::minimal::Transaction,
+    crypto::{PublicKey as BlsPublicKey, Signature as BlsSignature},
+    ssz::prelude::List,
+};
 use flate2::{write::GzEncoder, Compression};
+use futures::{Stream, TryStreamExt};
 use primitive_types::H384;
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE},
     Body, Response, StatusCode,
 };
+use reqwest_eventsource::{Event, EventSource};
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 use ssz::Encode;
-use std::{io::Write, str::FromStr};
+use std::{io::Write, pin::Pin, str::FromStr};
 use submission::{SubmitBlockRequest, SubmitBlockRequestNoBlobs, SubmitBlockRequestWithMetadata};
+use tracing::debug;
 use url::Url;
 
 pub use error::*;
@@ -42,7 +50,7 @@ const SIM_FAILED_NON_CRITICAL_ERRORS: &[&str] = &[
     "unknown ancestor",
     "missing trie node",
 ];
-
+pub const MAX_CONSTRAINTS_PER_SLOT: usize = 256;
 // @Org consolidate with primitives::mev_boost
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -241,6 +249,18 @@ pub struct ValidatorSlotData {
     pub validator_index: u64,
     pub entry: ValidatorRegistration,
 }
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct SignedConstraints {
+    pub message: ConstraintsMessage,
+    pub signature: BlsSignature,
+}
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct ConstraintsMessage {
+    pub pubkey: BlsPublicKey,
+    pub slot: u64,
+    pub top: bool,
+    pub transactions: List<Transaction, MAX_CONSTRAINTS_PER_SLOT>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -393,6 +413,61 @@ impl RelayClient {
     ) -> Result<Option<BuilderBlockReceived>, RelayError> {
         self.get_one_builder_block_received(&format!("block_hash={:?}", block_hash))
             .await
+    }
+
+    pub async fn get_preconf_list(&self, slot: u64) -> Result<Vec<SignedConstraints>, RelayError> {
+        let url = {
+            let mut url = self.url.clone();
+            url.set_path(&format!("/relay/v1/builder/constraints?slot={slot:}"));
+            url
+        };
+        let resp = reqwest::get(url).await?;
+        let content = resp.bytes().await?;
+        debug!(
+            "Getting preconf list from relay: {:?} from slot {}",
+            content, slot
+        );
+        Ok(serde_json::from_slice(&content).unwrap_or_default())
+    }
+
+    /// Returns a stream of constraints from the relay.
+    /// This uses Server-Sent Events (SSE) to receive a continuous stream of constraints.
+    pub fn constraints_stream(
+        &self,
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<SignedConstraints>, RelayError>> + Send>> {
+        let url = {
+            let mut url = self.url.clone();
+            url.set_path("/relay/v1/builder/constraints_stream");
+            url
+        };
+
+        let builder = self.client.get(url.clone());
+
+        // Add authorization headers if available
+
+        // Create the EventSource
+        let event_source = EventSource::new(builder).expect("Failed to create event source");
+
+        let stream = async_stream::stream! {
+            for await event in  event_source.into_stream() {
+                match event {
+                    Ok(Event::Open) => {}, // Skip open events
+                    Ok(Event::Message(message)) => {
+                        // Try to parse the message data as Vec<SignedConstraints>
+                        match serde_json::from_str::<Vec<SignedConstraints>>(&message.data) {
+                            Ok(constraints) => yield Ok(constraints),
+                            Err(e) => yield Err(RelayError::RelayError(RedactableRelayErrorResponse {
+                                code: Some(400),
+                                message: e.to_string(),
+                            })),
+                        }
+                    }
+                    Err(e) => yield Err(RelayError::UnknownRelayError(StatusCode::BAD_REQUEST, e.to_string())),
+
+                }
+            }
+        };
+        Box::pin(stream)
     }
 
     pub async fn validator_registration(

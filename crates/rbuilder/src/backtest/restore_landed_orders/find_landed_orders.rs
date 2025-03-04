@@ -28,7 +28,7 @@ impl SimplifiedOrder {
                     0,
                 )],
             ),
-            Order::Bundle(_) => {
+            Order::Bundle(_) | Order::PreconfBundle(_) => {
                 let txs = order
                     .list_txs()
                     .into_iter()

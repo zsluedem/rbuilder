@@ -1,4 +1,5 @@
 use ahash::HashMap;
+use tracing::info;
 
 use crate::primitives::{
     BundleReplacementData, Order, OrderId, OrderReplacementKey, ShareBundleReplacementKey,
@@ -33,6 +34,7 @@ const SBUNDLE_SEQUENCE_NUMBER: u64 = u64::MAX;
 
 impl ReplaceableOrderSink for OrderReplacementManager {
     fn insert_order(&mut self, order: Order) -> bool {
+        trace!("Insert order sink {:?}", order);
         if let Some((rep_key, sequence_number)) = order.replacement_key_and_sequence_number() {
             match self.replacement_states.entry(rep_key) {
                 std::collections::hash_map::Entry::Occupied(mut e) => {

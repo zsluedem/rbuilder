@@ -274,17 +274,19 @@ struct OrderCounter {
     mempool_txs: usize,
     bundles: usize,
     share_bundles: usize,
+    preconf_bundles: usize,
 }
 
 impl fmt::Debug for OrderCounter {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "OrderCounter {{ total: {}, mempool_txs: {}, bundles {}, share_bundles {} }}",
+            "OrderCounter {{ total: {}, mempool_txs: {}, bundles {}, share_bundles {} ， preconf_bundles {} }}",
             self.total(),
             self.mempool_txs,
             self.bundles,
-            self.share_bundles
+            self.share_bundles,
+            self.preconf_bundles
         )
     }
 }
@@ -295,9 +297,10 @@ impl OrderCounter {
             Order::Tx(_) => self.mempool_txs += 1,
             Order::Bundle(_) => self.bundles += 1,
             Order::ShareBundle(_) => self.share_bundles += 1,
+            Order::PreconfBundle(_) => self.preconf_bundles += 1,
         }
     }
     fn total(&self) -> usize {
-        self.mempool_txs + self.bundles + self.share_bundles
+        self.mempool_txs + self.bundles + self.share_bundles + self.preconf_bundles
     }
 }

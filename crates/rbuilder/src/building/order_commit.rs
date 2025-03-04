@@ -1100,7 +1100,7 @@ impl<'a, 'b, Tracer: SimulationTracer> PartialBlockFork<'a, 'b, Tracer> {
                     Err(err) => Ok(Err(err.into())),
                 }
             }
-            Order::Bundle(bundle) => {
+            Order::Bundle(bundle) | Order::PreconfBundle(bundle) => {
                 let res = self.commit_bundle(
                     bundle,
                     ctx,

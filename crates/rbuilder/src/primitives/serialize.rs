@@ -678,6 +678,7 @@ pub enum RawOrder {
     Bundle(RawBundle),
     Tx(RawTx),
     ShareBundle(RawShareBundle),
+    PreconfBundle(RawBundle),
 }
 
 #[derive(Error, Debug)]
@@ -710,6 +711,11 @@ impl RawOrder {
                     .decode_new_bundle(encoding)
                     .map_err(RawOrderConvertError::FailedToDecodeShareBundle)?,
             )),
+            RawOrder::PreconfBundle(bundle) => Ok(Order::PreconfBundle(
+                bundle
+                    .decode_new_bundle(encoding)
+                    .map_err(RawOrderConvertError::FailedToDecodeBundle)?,
+            )),
         }
     }
 }
@@ -722,6 +728,7 @@ impl From<Order> for RawOrder {
             Order::ShareBundle(bundle) => {
                 Self::ShareBundle(RawShareBundle::encode_no_blobs(bundle))
             }
+            Order::PreconfBundle(bundle) => Self::PreconfBundle(RawBundle::encode_no_blobs(bundle)),
         }
     }
 }

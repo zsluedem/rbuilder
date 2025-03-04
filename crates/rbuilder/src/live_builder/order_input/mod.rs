@@ -267,7 +267,7 @@ where
                     !cancellable_order
                 })
             }
-
+            trace!("After ignoring cancellable orders: {}", new_commands.len());
             if config.ignore_blobs {
                 new_commands.retain(|o| {
                     let has_blobs = match o {
@@ -282,7 +282,7 @@ where
                     !has_blobs
                 })
             }
-
+            trace!("After ignoring blobs: {}", new_commands.len());
             {
                 let mut orderpool = orderpool.lock();
                 orderpool.process_commands(new_commands.clone());
@@ -346,7 +346,7 @@ where
                         let mut orderpool = orderpool.lock();
                         let start = Instant::now();
 
-                        orderpool.head_updated(block_number, &state);
+                        orderpool.head_updated(block_number, &state, );
 
                         let update_time = start.elapsed();
                         let (tx_count, bundle_count) = orderpool.content_count();

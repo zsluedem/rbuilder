@@ -102,6 +102,7 @@ pub fn mark_command_received(command: &ReplaceableOrderPoolCommand, received_at:
                 Order::Bundle(_) => "bundle",
                 Order::Tx(_) => "tx",
                 Order::ShareBundle(_) => "sbundle",
+                Order::PreconfBundle(_) => "preconf_bundle",
             }
         }
         ReplaceableOrderPoolCommand::CancelShareBundle(_)

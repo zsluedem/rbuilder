@@ -119,7 +119,7 @@ impl OrderPool {
                 self.mempool_txs.push((order.clone(), Instant::now()));
                 (order, None)
             }
-            Order::Bundle(bundle) => {
+            Order::Bundle(bundle) | Order::PreconfBundle(bundle) => {
                 let target_block = bundle.block;
                 match target_block {
                     Some(target_block) => {

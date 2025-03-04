@@ -495,6 +495,7 @@ fn order_type(order: &RawOrder) -> &'static str {
         RawOrder::Bundle(_) => "bundle",
         RawOrder::Tx(_) => "tx",
         RawOrder::ShareBundle(_) => "sbundle",
+        RawOrder::PreconfBundle(_) => "preconf_bundle",
     }
 }
 

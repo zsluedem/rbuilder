@@ -1077,6 +1077,9 @@ fn order_redistribution_address(order: &Order, protect_signers: &[Address]) -> O
         Order::Tx(_) => {
             unreachable!("Mempool tx order can't have signer");
         }
+        Order::PreconfBundle(_) => {
+            unreachable!("Preconf bundle order not implemented");
+        }
     }
 }
 

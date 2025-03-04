@@ -693,6 +693,7 @@ pub enum Order {
     Bundle(Bundle),
     Tx(MempoolTx),
     ShareBundle(ShareBundle),
+    PreconfBundle(Bundle),
 }
 
 /// Uniquely identifies a replaceable sbundle
@@ -739,6 +740,7 @@ impl Order {
             Order::Bundle(bundle) => bundle.can_execute_with_block_base_fee(block_base_fee),
             Order::Tx(tx) => tx.tx_with_blobs.tx.max_fee_per_gas() >= block_base_fee,
             Order::ShareBundle(bundle) => bundle.can_execute_with_block_base_fee(block_base_fee),
+            Order::PreconfBundle(_) => true,
         }
     }
 
@@ -759,6 +761,7 @@ impl Order {
                     res
                 }
             }
+            Order::PreconfBundle(_) => vec![self],
         }
     }
 
@@ -772,6 +775,7 @@ impl Order {
                 optional: false,
             }],
             Order::ShareBundle(bundle) => bundle.nonces(),
+            Order::PreconfBundle(bundle) => bundle.nonces(),
         }
     }
 
@@ -780,6 +784,7 @@ impl Order {
             Order::Bundle(bundle) => OrderId::Bundle(bundle.uuid),
             Order::Tx(tx) => OrderId::Tx(tx.tx_with_blobs.hash()),
             Order::ShareBundle(bundle) => OrderId::ShareBundle(bundle.hash),
+            Order::PreconfBundle(bundle) => OrderId::Bundle(bundle.uuid),
         }
     }
 
@@ -793,6 +798,7 @@ impl Order {
             Order::Bundle(bundle) => bundle.list_txs(),
             Order::Tx(tx) => vec![(&tx.tx_with_blobs, true)],
             Order::ShareBundle(bundle) => bundle.list_txs(),
+            Order::PreconfBundle(bundle) => bundle.list_txs(),
         }
     }
 
@@ -816,6 +822,7 @@ impl Order {
                     r.sequence_number,
                 )
             }),
+            Order::PreconfBundle(_) => None,
         }
     }
 
@@ -830,6 +837,7 @@ impl Order {
             Order::Bundle(bundle) => bundle.block,
             Order::Tx(_) => None,
             Order::ShareBundle(bundle) => Some(bundle.block),
+            Order::PreconfBundle(bundle) => bundle.block,
         }
     }
 
@@ -839,6 +847,7 @@ impl Order {
             Order::Bundle(bundle) => bundle.signer,
             Order::ShareBundle(bundle) => bundle.signer,
             Order::Tx(_) => None,
+            Order::PreconfBundle(bundle) => bundle.signer,
         }
     }
 
@@ -847,6 +856,7 @@ impl Order {
             Order::Bundle(bundle) => &bundle.metadata,
             Order::Tx(tx) => &tx.tx_with_blobs.metadata,
             Order::ShareBundle(bundle) => &bundle.metadata,
+            Order::PreconfBundle(bundle) => &bundle.metadata,
         }
     }
 }

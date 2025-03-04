@@ -94,6 +94,7 @@ impl BuiltBlockTrace {
                 Order::Tx(_) => (acc.0 + 1, acc.1, acc.2),
                 Order::Bundle(_) => (acc.0, acc.1 + 1, acc.2),
                 Order::ShareBundle(_) => (acc.0, acc.1, acc.2 + 1),
+                Order::PreconfBundle(_) => (acc.0, acc.1 + 1, acc.2)
             })
     }
 

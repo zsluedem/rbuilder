@@ -51,6 +51,7 @@ pub fn write_order<Buffer: Write>(
             buf.write_str(&format!("ShB {:?}\n", sb.hash))?;
             write_share_bundle_inner(indent + 1, buf, &sb.inner_bundle)
         }
+        Order::PreconfBundle(b) => buf.write_str(&format!("PreconfBundle {}\n", b.hash)),
     }
 }
 

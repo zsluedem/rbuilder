@@ -41,6 +41,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 #
 FROM base as builder
 WORKDIR /app
+# Default binary filename rbuilder
+# Alternatively can be set to "reth-rbuilder" - to have reth included in the binary
+ARG RBUILDER_BIN="reth-rbuilder"
 COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
@@ -50,31 +53,19 @@ COPY . .
 
 
 FROM builder as rbuilder
-ARG RBUILDER_BIN
-ARG FEATURES
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=$SCCACHE_DIR,sharing=locked \
     cargo build --release --features="$FEATURES" --package=${RBUILDER_BIN}
 
-FROM builder as test-relay
-ARG FEATURES
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=$SCCACHE_DIR,sharing=locked \
-    cargo build --release --features="$FEATURES" --package=test-relay
-
-
-# Runtime container for test-relay
-FROM gcr.io/distroless/cc-debian12 as test-relay-runtime
+#
+# Runtime container
+#
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y libssl-dev
 WORKDIR /app
-COPY --from=test-relay /app/target/release/test-relay /app/test-relay
-ENTRYPOINT ["/app/test-relay"]
 
-# Runtime container for rbuilder
-FROM gcr.io/distroless/cc-debian12 as rbuilder-runtime
-ARG RBUILDER_BIN
-WORKDIR /app
-COPY --from=rbuilder /app/target/release/${RBUILDER_BIN} /app/rbuilder
-ENTRYPOINT ["/app/rbuilder"]
+ARG RBUILDER_BIN="reth-rbuilder"
+COPY --from=rbuilder /app/target/release/${RBUILDER_BIN} /bin/reth
 
+ENTRYPOINT ["/bin/bash"]

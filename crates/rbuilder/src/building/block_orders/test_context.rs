@@ -221,6 +221,7 @@ impl<TestedSinkType: SimulatedOrderSink> TestContext<TestedSinkType> {
             Order::Bundle(_) => panic!("Order::Bundle expecting ShareBundle"),
             Order::Tx(_) => panic!("Order::Tx expecting ShareBundle"),
             Order::ShareBundle(sb) => sb,
+            Order::PreconfBundle(_) => panic!("Order::PreconfBundle expecting ShareBundle"),
         }
     }
 

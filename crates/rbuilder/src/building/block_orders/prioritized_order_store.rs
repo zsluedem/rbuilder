@@ -1,12 +1,13 @@
-use std::{cmp::Ordering, collections::hash_map::Entry};
+use std::{cmp::Ordering, collections::hash_map::Entry, u128};
 
 use ahash::{HashMap, HashSet};
 use alloy_primitives::Address;
 use priority_queue::PriorityQueue;
+use tracing::info;
 
 use crate::{
     building::Sorting,
-    primitives::{AccountNonce, Nonce, OrderId, SimulatedOrder},
+    primitives::{AccountNonce, Nonce, Order, OrderId, SimulatedOrder},
     telemetry::mark_order_not_ready_for_immediate_inclusion,
 };
 
@@ -206,21 +207,41 @@ impl SimulatedOrderSink for PrioritizedOrderStore {
             }
         }
         if pending_nonces.is_empty() {
-            self.main_queue.push(
-                sim_order.id(),
-                OrderPriority {
-                    priority: self
-                        .priority
-                        .sorting_value(&sim_order.sim_value)
-                        .to::<u128>(),
-                    order_id: sim_order.id(),
-                },
-            );
-            for nonce in sim_order.nonces() {
-                self.main_queue_nonces
-                    .entry(nonce.address)
-                    .or_default()
-                    .push(sim_order.id());
+            match sim_order.order {
+                Order::PreconfBundle(ref o) => {
+                    info!("Get constraint order from sim results {:?}", o);
+                    self.main_queue.push(
+                        sim_order.id(),
+                        OrderPriority {
+                            priority: u128::MAX,
+                            order_id: sim_order.id(),
+                        },
+                    );
+                    for nonce in sim_order.nonces() {
+                        self.main_queue_nonces
+                            .entry(nonce.address)
+                            .or_default()
+                            .push(sim_order.id());
+                    }
+                }
+                _ => {
+                    self.main_queue.push(
+                        sim_order.id(),
+                        OrderPriority {
+                            priority: self
+                                .priority
+                                .sorting_value(&sim_order.sim_value)
+                                .to::<u128>(),
+                            order_id: sim_order.id(),
+                        },
+                    );
+                    for nonce in sim_order.nonces() {
+                        self.main_queue_nonces
+                            .entry(nonce.address)
+                            .or_default()
+                            .push(sim_order.id());
+                    }
+                }
             }
         } else {
             for pending_nonce in pending_nonces {

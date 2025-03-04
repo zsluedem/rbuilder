@@ -19,7 +19,8 @@ use crate::{
         simulation::OrderSimulationPool,
         watchdog::spawn_watchdog_thread,
     },
-    primitives::{MempoolTx, Order, TransactionSignedEcRecoveredWithBlobs},
+    mev_boost::{RelayError, SignedConstraints},
+    primitives::{Bundle, MempoolTx, Metadata, Order, TransactionSignedEcRecoveredWithBlobs},
     provider::StateProviderFactory,
     telemetry::{inc_active_slots, mark_building_started, reset_histogram_metrics},
     utils::{
@@ -27,24 +28,29 @@ use crate::{
     },
 };
 use alloy_consensus::Header;
+use alloy_eips::Decodable2718;
 use alloy_primitives::{Address, B256};
 use block_list_provider::BlockListProvider;
 use building::BlockBuildingPool;
 use eyre::Context;
+use futures::{Stream, StreamExt};
 use jsonrpsee::RpcModule;
 use order_input::ReplaceableOrderPoolCommand;
-use payload_events::MevBoostSlotData;
+use payload_events::{relay_epoch_cache::RelaysForSlotData, MevBoostSlotData};
+use reqwest::StatusCode;
 use reth::transaction_pool::{
     BlobStore, EthPooledTransaction, Pool, TransactionListenerKind, TransactionOrdering,
     TransactionPool, TransactionValidator,
 };
 use reth_chainspec::ChainSpec;
 use reth_primitives::{Recovered, TransactionSigned};
-use std::{cmp::min, fmt::Debug, path::PathBuf, sync::Arc, time::Duration};
+use reth_primitives_traits::SignedTransaction;
+use std::{cmp::min, fmt::Debug, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct TimingsConfig {
@@ -82,6 +88,18 @@ impl TimingsConfig {
 /// Trait used to trigger a new block building process in the slot.
 pub trait SlotSource {
     fn recv_slot_channel(self) -> mpsc::UnboundedReceiver<MevBoostSlotData>;
+    fn get_preconf_source(&self) -> RelaysForSlotData;
+}
+
+pub trait PreconfSource {
+    fn get_preconfs(
+        &mut self,
+        slot: u64,
+    ) -> impl std::future::Future<Output = Vec<TransactionSigned>> + Send;
+
+    fn get_contraint_stream(
+        &mut self,
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<SignedConstraints>, RelayError>> + Send>>;
 }
 
 /// Max headers sent to the cleaning task before the main loop blocks.
@@ -155,9 +173,11 @@ where
         }
 
         let mut inner_jobs_handles = Vec::new();
+        let mut preconf_source = self.blocks_source.get_preconf_source();
         let mut payload_events_channel = self.blocks_source.recv_slot_channel();
 
         let (header_sender, header_receiver) = mpsc::channel(CLEAN_TASKS_CHANNEL_SIZE);
+        let constraints_orderpool_sender = self.orderpool_sender.clone();
 
         let orderpool_subscriber = {
             let (handle, sub) = start_orderpool_jobs(
@@ -202,6 +222,13 @@ where
                 None
             }
         };
+
+        let constraints_stream = preconf_source.get_contraint_stream();
+        tokio::spawn(async move {
+            info!("Starts to subscribe constraint stream");
+            process_preconf_streams(constraints_stream, constraints_orderpool_sender).await;
+            info!("Subscribing constaints stream exit");
+        });
 
         while let Some(payload) = payload_events_channel.recv().await {
             reset_histogram_metrics();
@@ -408,4 +435,85 @@ async fn try_send_to_orderpool<V, T, S>(
             error!("Error creating order from transaction: {:#}", e);
         }
     }
+}
+
+async fn process_preconf_streams(
+    mut stream: Pin<Box<dyn Stream<Item = Result<Vec<SignedConstraints>, RelayError>> + Send>>,
+    orderpool_sender: mpsc::Sender<ReplaceableOrderPoolCommand>,
+) {
+    while let Some(Ok(constraints)) = stream.next().await {
+        let order = constraints_to_order(constraints).expect("Constraints decode error!");
+        info!(
+            "Receive constraints bundler with  {} txs",
+            order.list_txs().len()
+        );
+        if let Err(e) = orderpool_sender
+            .send(ReplaceableOrderPoolCommand::Order(order))
+            .await
+        {
+            error!("Error sending order to orderpool: {:#}", e);
+        }
+    }
+}
+
+fn constraints_to_order(constraints: Vec<SignedConstraints>) -> Result<Order, RelayError> {
+    let first_slot = constraints.first().unwrap().message.slot;
+    let same_slot = constraints.iter().all(|c| c.message.slot == first_slot);
+    if !same_slot {
+        error!("Constraints have different slots");
+    }
+    let txs: Vec<TransactionSignedEcRecoveredWithBlobs> = constraints
+        .into_iter()
+        .map(|c| {
+            c.message.transactions.to_vec().into_iter().map(|tx| {
+                TransactionSigned::decode_2718(&mut tx.as_ref())
+                    .map_err(|e| {
+                        RelayError::UnknownRelayError(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("decode transactnio error {e:?}"),
+                        )
+                    })
+                    .and_then(|tx| {
+                        let signer = tx.recover_signer().map_err(|e| {
+                            RelayError::UnknownRelayError(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("recover signer error {e:?}"),
+                            )
+                        })?;
+                        let recovered = Recovered::new_unchecked(tx, signer);
+                        TransactionSignedEcRecoveredWithBlobs::new_no_blobs(recovered).map_err(
+                            |e| {
+                                RelayError::UnknownRelayError(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("create transaction error {e:?}"),
+                                )
+                            },
+                        )
+                    })
+            })
+        })
+        .flatten()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let reverting_tx_hashes = txs
+        .iter()
+        .map(|tx| tx.as_ref().tx_hash().clone())
+        .collect::<Vec<_>>();
+
+    let mut bundle = Bundle {
+        block: None,
+        min_timestamp: None,
+        max_timestamp: None,
+        txs,
+        reverting_tx_hashes: reverting_tx_hashes,
+        dropping_tx_hashes: vec![],
+        hash: B256::ZERO,
+        uuid: Uuid::new_v4(),
+        replacement_data: None,
+        signer: None,
+        metadata: Metadata::default(),
+        refund: None,
+    };
+    bundle.hash_slow();
+    Ok(Order::PreconfBundle(bundle))
 }
